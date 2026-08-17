@@ -331,6 +331,9 @@ def publish_app_repo(settings: dict) -> dict:
     staged = git("status", "--porcelain", cwd=ROOT, check=False)
     if staged.stdout.strip():
         git("commit", "-m", "chore: 同步 GitHub 高星日报", cwd=ROOT, check=False)
+    pull = git("pull", "--rebase", "origin", "main", check=False)
+    if pull.returncode != 0 and "couldn't find remote ref" not in (pull.stderr or ""):
+        git("pull", "--rebase", "--autostash", "origin", "main", cwd=ROOT, check=False)
     push = git("push", "-u", "origin", "HEAD:main", cwd=ROOT, check=False)
     git("remote", "set-url", "origin", public_git_url(remote["full_name"]), cwd=ROOT)
     if push.returncode != 0:

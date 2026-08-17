@@ -390,6 +390,12 @@ def get_repo(repo_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def get_repo_by_full_name(full_name: str) -> dict | None:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM repos WHERE full_name=?", (full_name,)).fetchone()
+    return dict(row) if row else None
+
+
 def list_dates() -> list[str]:
     with db() as conn:
         rows = conn.execute(

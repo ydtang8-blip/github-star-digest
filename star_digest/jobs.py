@@ -19,6 +19,7 @@ from .github_link import (
     sync_hub_catalog,
 )
 from .summarizer import summarize_items
+from .takeover import write_handoff
 
 _job_lock = Lock()
 _job: dict[str, Any] = {
@@ -189,6 +190,7 @@ def run_downloads(repo_ids: list[int]) -> dict[str, Any]:
             started_at=started,
             finished_at="",
             downloads=downloads,
+            requested_ids=repo_ids,
         )
         total = max(len(repo_ids), 1)
         for i, repo_id in enumerate(repo_ids, start=1):
@@ -243,6 +245,7 @@ def run_downloads(repo_ids: list[int]) -> dict[str, Any]:
                 _set(message=f"下载结束，总册已更新：{hub['full_name']}")
         except Exception as exc:
             _set(message=f"本地下载完成，但同步总册失败：{exc}")
+        write_handoff(_job, settings, repo_ids)
         _set(
             status="done",
             stage="done",
@@ -258,6 +261,7 @@ def run_downloads(repo_ids: list[int]) -> dict[str, Any]:
             message="下载失败",
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
+        write_handoff(_job, db.get_settings(), repo_ids)
         return job_status()
     finally:
         _job_lock.release()
@@ -308,6 +312,7 @@ def run_connect() -> dict[str, Any]:
             started_at=datetime.now(timezone.utc).isoformat(),
             finished_at="",
             downloads=[],
+            requested_ids=[],
         )
         identity = fetch_identity(settings)
         db.save_settings({"github_login": identity["login"]})
@@ -365,6 +370,7 @@ def run_connect() -> dict[str, Any]:
             message=" ".join(parts),
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
+        write_handoff(_job, db.get_settings(), [])
         return job_status()
     except Exception as exc:
         _set(
@@ -375,6 +381,7 @@ def run_connect() -> dict[str, Any]:
             error=f"{exc}\n{traceback.format_exc()}",
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
+        write_handoff(_job, db.get_settings(), [])
         return job_status()
     finally:
         _job_lock.release()
