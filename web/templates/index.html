@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GitHub 高星日报</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="kicker">每天到电脑前打开 · 勾选 · 下载</p>
+      <h1>GitHub 高星日报</h1>
+      <p class="sub">今日趋势 + 近一周新晋高星。勾选后会下载到本地，并 fork 到你的 GitHub，写进你的精选总仓库。</p>
+    </div>
+    <div class="top-actions">
+      <label class="date-wrap">日期
+        <input type="date" id="date" />
+      </label>
+      <button class="btn" id="refresh-btn" type="button">刷新</button>
+      <button class="btn" id="collect-btn" type="button">重新采集今日</button>
+      <button class="btn ghost" id="settings-btn" type="button">设置</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats"></section>
+  <p class="connect-bar" id="connect-bar" hidden></p>
+  <p class="job" id="job" hidden></p>
+
+  <section class="toolbar">
+    <input id="q" type="search" placeholder="搜项目名、摘要、用途…" />
+    <select id="language">
+      <option value="">全部语言</option>
+    </select>
+    <select id="source">
+      <option value="">全部来源</option>
+      <option value="trending">全球趋势</option>
+      <option value="trending-zh">中文趋势</option>
+      <option value="rising">新晋高星</option>
+    </select>
+    <select id="status">
+      <option value="">全部状态</option>
+      <option value="new">未处理</option>
+      <option value="useful">已标有用</option>
+      <option value="skipped">已忽略</option>
+      <option value="downloaded">已下载</option>
+    </select>
+  </section>
+
+  <main class="layout">
+    <section class="list" id="list"></section>
+    <aside class="detail" id="detail">
+      <div class="empty">点左边一条，看完整摘要和 README。</div>
+    </aside>
+  </main>
+
+  <footer class="dock" id="dock">
+    <div>
+      已选 <b id="picked-count">0</b> 个
+      <span class="muted" id="picked-names"></span>
+    </div>
+    <div class="dock-actions">
+      <button class="btn" id="mark-useful-btn" type="button">标为有用</button>
+      <button class="btn primary" id="download-btn" type="button">下载并接到我的 GitHub</button>
+      <button class="btn ghost" id="open-folder-btn" type="button">打开下载目录</button>
+    </div>
+  </footer>
+
+  <dialog id="settings">
+    <form method="dialog" class="sheet" id="settings-form">
+      <h2>设置</h2>
+      <p class="hint" id="github-status">还没连上你的 GitHub。</p>
+      <label>本地下载目录
+        <input name="download_dir" id="download_dir" />
+      </label>
+      <label>GitHub Token（必填，用来接到你的仓库）
+        <input name="github_token" id="github_token" placeholder="ghp_… 需要 repo 权限" autocomplete="off" />
+      </label>
+      <label>精选总仓库名
+        <input name="hub_repo" id="hub_repo" placeholder="github-star-picks" />
+      </label>
+      <label>xAI API Key（可选，用来写更好的中文摘要）
+        <input name="xai_api_key" id="xai_api_key" placeholder="xai-… 可留空" autocomplete="off" />
+      </label>
+      <div class="row">
+        <label>新晋回看天数
+          <input name="rising_days" id="rising_days" type="number" min="1" max="30" />
+        </label>
+        <label>新晋最低 star
+          <input name="rising_min_stars" id="rising_min_stars" type="number" min="1" />
+        </label>
+        <label>每日最多条数
+          <input name="max_repos_per_day" id="max_repos_per_day" type="number" min="10" max="120" />
+        </label>
+      </div>
+      <p class="hint">到 <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer">GitHub Token</a> 新建，勾选 <code>repo</code>。只存在本机，服务只监听 127.0.0.1。</p>
+      <div class="sheet-actions">
+        <button class="btn ghost" value="cancel" type="submit">关闭</button>
+        <button class="btn" id="save-settings" type="button">保存</button>
+        <button class="btn primary" id="connect-btn" type="button">连接并同步到我的 GitHub</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
