@@ -94,13 +94,15 @@ def rescue_downloads(settings: dict[str, Any], full_names: list[str] | None = No
         ]
         if not targets:
             targets = [_full_name_of(e) for e in _handoff_entries()]
+    targets = list(dict.fromkeys(targets))
 
     results: list[dict[str, Any]] = []
     for full_name in targets:
         dest = target_dir(root, full_name)
         repo = db.get_repo_by_full_name(full_name)
+        was_present = already_downloaded(dest)
         try:
-            if not already_downloaded(dest):
+            if not was_present:
                 download_repo(full_name, root, settings)
             if settings.get("github_token"):
                 link = ensure_fork(full_name, settings)
@@ -117,12 +119,12 @@ def rescue_downloads(settings: dict[str, Any], full_names: list[str] | None = No
                 {
                     "full_name": full_name,
                     "ok": True,
-                    "already": already_downloaded(dest) and not dest.joinpath(".git").exists() is False,
+                    "already": was_present,
                     "path": str(dest),
                 }
             )
         except Exception as exc:
-            results.append({"full_name": full_name, "ok": False, "already": False, "error": str(exc)})
+            results.append({"full_name": full_name, "ok": False, "already": was_present, "error": str(exc)})
 
     hub: dict[str, Any] | None = None
     if settings.get("github_token"):

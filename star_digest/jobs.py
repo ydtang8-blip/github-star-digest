@@ -176,6 +176,7 @@ def run_downloads(repo_ids: list[int]) -> dict[str, Any]:
     if not _job_lock.acquire(blocking=False):
         return job_status()
     try:
+        repo_ids = list(dict.fromkeys(repo_ids))
         settings = db.get_settings()
         root = settings["download_dir"]
         started = datetime.now(timezone.utc).isoformat()

@@ -9,6 +9,8 @@ import httpx
 
 from .collector import github_headers
 
+DONE_MARKER = ".star-digest-done"
+
 
 def safe_dirname(full_name: str) -> str:
     return full_name.replace("/", "__")
@@ -18,10 +20,16 @@ def target_dir(download_root: str | Path, full_name: str) -> Path:
     return Path(download_root) / safe_dirname(full_name)
 
 
+def _mark_done(path: Path) -> None:
+    (path / DONE_MARKER).write_text("done", encoding="utf-8")
+
+
 def already_downloaded(path: Path) -> bool:
     if not path.exists():
         return False
     if (path / ".git").exists():
+        return True
+    if (path / DONE_MARKER).exists():
         return True
     return any(path.iterdir())
 
@@ -44,10 +52,13 @@ def download_repo(full_name: str, download_root: str | Path, settings: dict) -> 
             errors="replace",
         )
         if proc.returncode == 0 and dest.exists():
+            _mark_done(dest)
             return dest
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
-    return download_zipball(full_name, dest, settings)
+    path = download_zipball(full_name, dest, settings)
+    _mark_done(dest)
+    return path
 
 
 def download_zipball(full_name: str, dest: Path, settings: dict) -> Path:
