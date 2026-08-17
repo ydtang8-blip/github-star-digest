@@ -48,11 +48,11 @@ def heuristic_summary(repo: dict, item: dict) -> dict:
     kind = classify(" ".join([desc, para, repo.get("full_name") or ""]))
     lang = repo.get("language") or "多语言"
     stars_today = int(item.get("stars_today") or 0)
-    body = desc or para or "暂无简介，打开仓库主页看 README。"
-    if not _mostly_cjk(body):
-        summary = f"{kind}（{lang}）。{body}"
-    else:
+    body = desc or para
+    if body and _mostly_cjk(body):
         summary = body
+    else:
+        summary = f"{kind}，主要语言 {lang}。中文摘要还没生成，点「用 DeepSeek 写中文摘要」。"
     why_parts = []
     if stars_today:
         why_parts.append(f"今日热度 +{stars_today}")
@@ -61,8 +61,8 @@ def heuristic_summary(repo: dict, item: dict) -> dict:
     elif item.get("source") == "rising":
         why_parts.append("近几天新仓库里星标靠前")
     if repo.get("stars"):
-        why_parts.append(f"累计 {repo['stars']:,} star")
-    why_parts.append(f"适合先看 README 再决定是否本地下载")
+        why_parts.append(f"累计 {repo['stars']:,} 星")
+    why_parts.append("先看中文摘要，再决定要不要下载")
     tags = [kind, lang]
     if item.get("source") == "trending-zh":
         tags.append("中文社区")
@@ -94,13 +94,7 @@ def _mostly_cjk(text: str) -> bool:
     return cjk >= max(4, len(text) * 0.2)
 
 
-def summarize_with_grok(batch: list[dict], settings: dict) -> dict[str, dict]:
-    api_key = (settings.get("xai_api_key") or "").strip()
-    if not api_key:
-        return {}
-    from openai import OpenAI
-
-    model = settings.get("xai_model") or "grok-4.5"
+def _batch_payload(batch: list[dict]) -> list[dict]:
     payload = []
     for row in batch:
         payload.append(
@@ -111,21 +105,23 @@ def summarize_with_grok(batch: list[dict], settings: dict) -> dict[str, dict]:
                 "stars": row.get("stars") or 0,
                 "stars_today": row.get("stars_today") or 0,
                 "source": row.get("source") or "",
-                "readme": (row.get("readme_excerpt") or "")[:2500],
+                "readme": (row.get("readme_excerpt") or "")[:400],
             }
         )
-    prompt = (
-        "你是一名每天筛选开源项目的工程师。为每个仓库写中文简报，供用户决定要不要本地下载学习。"
-        "只返回 JSON 数组，不要 markdown。每项字段：\n"
-        "full_name, summary_zh（80-140字，说清它解决什么问题、和同类差在哪）,"
-        "why_useful（一句话，值不值得本地下载、适合谁）,"
-        "tags（2-4个中文短标签）,"
-        "score（1-5，对个人开发者的实用度）。\n"
-        f"仓库列表：{json.dumps(payload, ensure_ascii=False)}"
+    return payload
+
+
+def _summary_prompt(batch: list[dict]) -> str:
+    return (
+        "为每个仓库写简体中文简报。只返回 JSON 数组，不要 markdown。"
+        "正文必须中文。只有项目名、语言名、专有名词可以保留英文，不要整句英文简介。"
+        "字段：full_name, summary_zh（40-70字，说清它做什么）, "
+        "why_useful（一句中文，值不值得下载）, tags（2-4个中文标签）, score（1-5）。\n"
+        f"{json.dumps(_batch_payload(batch), ensure_ascii=False)}"
     )
-    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    resp = client.responses.create(model=model, input=prompt)
-    text = getattr(resp, "output_text", "") or ""
+
+
+def _parse_summaries(text: str) -> dict[str, dict]:
     data = _extract_json_array(text)
     out: dict[str, dict] = {}
     for item in data:
@@ -144,39 +140,108 @@ def summarize_with_grok(batch: list[dict], settings: dict) -> dict[str, dict]:
     return out
 
 
-def summarize_items(rows: Iterable[dict], settings: dict) -> list[dict]:
+def summarize_with_deepseek(batch: list[dict], settings: dict) -> dict[str, dict]:
+    api_key = (settings.get("deepseek_api_key") or "").strip()
+    if not api_key:
+        return {}
+    from openai import OpenAI
+
+    model = "deepseek-v4-flash"
+    base_url = settings.get("deepseek_base_url") or "https://api.deepseek.com"
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=25.0)
+    kwargs = dict(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": "只输出 JSON 数组。摘要、理由、标签一律简体中文。",
+            },
+            {"role": "user", "content": _summary_prompt(batch)},
+        ],
+        stream=False,
+        temperature=0.2,
+        max_tokens=700,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except Exception:
+        kwargs.pop("extra_body", None)
+        resp = client.chat.completions.create(**kwargs)
+    text = (resp.choices[0].message.content or "").strip()
+    return _parse_summaries(text)
+
+
+def summarize_with_grok(batch: list[dict], settings: dict) -> dict[str, dict]:
+    api_key = (settings.get("xai_api_key") or "").strip()
+    if not api_key:
+        return {}
+    from openai import OpenAI
+
+    model = settings.get("xai_model") or "grok-4.5"
+    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    resp = client.responses.create(model=model, input=_summary_prompt(batch))
+    text = getattr(resp, "output_text", "") or ""
+    return _parse_summaries(text)
+
+
+def _chunks(rows: list[dict], size: int) -> list[list[dict]]:
+    return [rows[i : i + size] for i in range(0, len(rows), size)]
+
+
+def _run_batches(rows: list[dict], settings: dict, fn, on_batch=None) -> dict[str, dict]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    ai_map: dict[str, dict] = {}
+    batches = _chunks(rows, 6)
+    workers = min(3, max(1, len(batches)))
+    if workers == 1:
+        for i, chunk in enumerate(batches, start=1):
+            part = fn(chunk, settings)
+            ai_map.update(part)
+            if on_batch:
+                on_batch(i, len(batches), part)
+        return ai_map
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn, chunk, settings): idx for idx, chunk in enumerate(batches, start=1)}
+        done = 0
+        for fut in as_completed(futures):
+            part = fut.result()
+            ai_map.update(part)
+            done += 1
+            if on_batch:
+                on_batch(done, len(batches), part)
+    return ai_map
+
+
+def merge_summary(row: dict, extra: dict | None) -> dict:
+    base = heuristic_summary(row, row)
+    extra = extra or {}
+    if extra.get("summary_zh"):
+        base["summary_zh"] = extra["summary_zh"]
+    if extra.get("why_useful"):
+        base["why_useful"] = extra["why_useful"]
+    if extra.get("tags"):
+        base["tags"] = extra["tags"]
+    if extra.get("score"):
+        base["score"] = extra["score"]
+    return base
+
+
+def summarize_items(rows: Iterable[dict], settings: dict, on_batch=None) -> list[dict]:
     rows = list(rows)
     ai_map: dict[str, dict] = {}
-    if settings.get("xai_api_key"):
-        chunk: list[dict] = []
-        for row in rows:
-            chunk.append(row)
-            if len(chunk) >= 8:
-                try:
-                    ai_map.update(summarize_with_grok(chunk, settings))
-                except Exception:
-                    pass
-                chunk = []
-        if chunk:
-            try:
-                ai_map.update(summarize_with_grok(chunk, settings))
-            except Exception:
-                pass
-    results = []
-    for row in rows:
-        base = heuristic_summary(row, row)
-        extra = ai_map.get((row.get("full_name") or "").lower())
-        if extra:
-            if extra.get("summary_zh"):
-                base["summary_zh"] = extra["summary_zh"]
-            if extra.get("why_useful"):
-                base["why_useful"] = extra["why_useful"]
-            if extra.get("tags"):
-                base["tags"] = extra["tags"]
-            if extra.get("score"):
-                base["score"] = extra["score"]
-        results.append(base)
-    return results
+    if settings.get("deepseek_api_key"):
+        try:
+            ai_map = _run_batches(rows, settings, summarize_with_deepseek, on_batch=on_batch)
+        except Exception:
+            ai_map = {}
+    if not ai_map and settings.get("xai_api_key"):
+        try:
+            ai_map = _run_batches(rows, settings, summarize_with_grok, on_batch=on_batch)
+        except Exception:
+            ai_map = {}
+    return [merge_summary(row, ai_map.get((row.get("full_name") or "").lower())) for row in rows]
 
 
 def _safe_score(value) -> int | None:

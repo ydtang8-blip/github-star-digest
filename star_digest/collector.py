@@ -307,10 +307,63 @@ def fetch_readme(full_name: str, branch: str | None, settings: dict) -> str:
     return ""
 
 
+PROMO_HEADING = re.compile(
+    r"apilayer|sponsor|now live|sign up|best[- ]seller|discord server|"
+    r"postman collection|one api key|covered under",
+    re.I,
+)
+PROMO_LINE = re.compile(
+    r"utm_source=|apilayer\.com|app\.apilayer|god\.gw\.postman|"
+    r"postman\.com/.*/collection|entityType%3D|workspaceId%3D|"
+    r"discord\.com/invite|sign up and start|one account, one dashboard",
+    re.I,
+)
+
+
+def strip_promo(text: str) -> str:
+    """Drop sponsor/ad blocks so summaries see the real project intro."""
+    blocks = re.split(r"(?=^#{1,3}\s)", text.replace("\r\n", "\n"), flags=re.M)
+    kept: list[str] = []
+    for block in blocks:
+        raw = block.strip()
+        if not raw:
+            continue
+        first = raw.splitlines()[0]
+        heading = first.lstrip("#").strip()
+        if PROMO_HEADING.search(heading) and not re.search(
+            r"public api|repository is|manually curated", raw, re.I
+        ):
+            continue
+        lines = []
+        for line in raw.splitlines():
+            if re.search(r"<div>|<p>|</p>|</div>", line, re.I) and "http" in line.lower():
+                continue
+            if PROMO_LINE.search(line):
+                prose = re.sub(r"\[.*?\]\(.*?\)", "", line)
+                prose = re.sub(r"https?://\S+", "", prose).strip(" -*|")
+                if len(prose) < 40:
+                    continue
+                line = prose
+            lines.append(line)
+        cleaned = "\n".join(lines).strip()
+        cleaned = re.sub(r"<[^>]+>", "", cleaned)
+        cleaned = re.sub(
+            r"^(APILayer is|Join our|Explore\s+here).*$",
+            "",
+            cleaned,
+            flags=re.I | re.M,
+        )
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        if cleaned:
+            kept.append(cleaned)
+    return "\n\n".join(kept).strip() or text
+
+
 def clip_readme(text: str, limit: int = 4000) -> str:
     text = text.replace("\r\n", "\n")
     text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
     text = re.sub(r"<img[^>]*>", "", text, flags=re.I)
+    text = strip_promo(text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) > limit:
         return text[:limit].rsplit("\n", 1)[0] + "\n…"

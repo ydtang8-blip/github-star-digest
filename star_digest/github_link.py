@@ -18,6 +18,59 @@ class GitHubLinkError(RuntimeError):
     pass
 
 
+def _api_message(resp: httpx.Response) -> str:
+    text = (resp.text or "").strip()
+    try:
+        data = resp.json()
+    except Exception:
+        return f"{resp.status_code} {text[:240]}"
+    if isinstance(data, dict):
+        msg = data.get("message") or ""
+        extra = data.get("documentation_url") or ""
+        errors = data.get("errors") or []
+        detail = ""
+        if isinstance(errors, list) and errors:
+            detail = "；".join(
+                e.get("message", str(e)) if isinstance(e, dict) else str(e) for e in errors[:3]
+            )
+        bits = [p for p in (msg, detail) if p]
+        hint = ""
+        blob = " ".join(bits).lower()
+        if resp.status_code == 403:
+            if "personal access token" in blob or "resource not accessible" in blob:
+                hint = (
+                    "当前 Token 没有「新建仓库」权限。"
+                    "请用 Classic token，勾选 repo；"
+                    "或先在网页上手动建好空仓库 github-star-digest / github-star-picks。"
+                )
+            elif "sso" in blob:
+                hint = "这个 Token 还要去 GitHub 点 Authorize SSO。"
+        elif resp.status_code == 422 and "already exists" in blob:
+            hint = "仓库名已存在，将改用现有仓库。"
+        body = " ".join(bits) or text[:200]
+        return " ".join(p for p in (f"{resp.status_code}", body, hint, extra) if p)
+    return f"{resp.status_code} {text[:240]}"
+
+
+def inspect_token(settings: dict) -> dict:
+    with _client(settings) as client:
+        resp = client.get("/user")
+        if resp.status_code >= 400:
+            raise GitHubLinkError(_api_message(resp))
+        scopes = (resp.headers.get("x-oauth-scopes") or "").replace(" ", "")
+        scope_list = [s for s in scopes.split(",") if s]
+        login = (resp.json() or {}).get("login") or ""
+    classic = bool(scope_list)
+    can_create = (not classic) or any(s in {"repo", "public_repo"} for s in scope_list)
+    return {
+        "login": login,
+        "classic": classic,
+        "scopes": scope_list,
+        "can_create_repo": can_create,
+        "fine_grained": not classic,
+    }
+
+
 def _client(settings: dict) -> httpx.Client:
     token = (settings.get("github_token") or "").strip()
     if not token:
@@ -34,9 +87,9 @@ def fetch_identity(settings: dict) -> dict:
     with _client(settings) as client:
         resp = client.get("/user")
         if resp.status_code == 401:
-            raise GitHubLinkError("GitHub Token 无效，请重新创建并勾选 repo 权限。")
+            raise GitHubLinkError("GitHub Token 无效，请重新创建 Classic token，并勾选 repo。")
         if resp.status_code >= 400:
-            raise GitHubLinkError(f"读取 GitHub 账号失败：{resp.status_code} {resp.text[:200]}")
+            raise GitHubLinkError(f"读取 GitHub 账号失败：{_api_message(resp)}")
         data = resp.json()
     login = data.get("login")
     if not login:
@@ -75,7 +128,7 @@ def ensure_fork(full_name: str, settings: dict) -> dict:
             }
         resp = client.post(f"/repos/{owner}/{name}/forks")
         if resp.status_code not in {200, 201, 202}:
-            raise GitHubLinkError(f"Fork {full_name} 失败：{resp.status_code} {resp.text[:240]}")
+            raise GitHubLinkError(f"Fork {full_name} 失败：{_api_message(resp)}")
         forked = _wait_fork(client, login, name)
     return {
         "fork_full_name": forked.get("full_name") or f"{login}/{name}",
@@ -154,8 +207,18 @@ def ensure_repo(settings: dict, name: str, description: str) -> dict:
             "auto_init": True,
         }
         created = client.post("/user/repos", json=payload)
+        if created.status_code == 422:
+            again = client.get(f"/repos/{login}/{name}")
+            if again.status_code == 200:
+                data = again.json()
+                return {
+                    "full_name": data["full_name"],
+                    "html_url": data["html_url"],
+                    "clone_url": data.get("clone_url") or public_git_url(data["full_name"]),
+                    "created": False,
+                }
         if created.status_code not in {200, 201}:
-            raise GitHubLinkError(f"创建仓库 {name} 失败：{created.status_code} {created.text[:240]}")
+            raise GitHubLinkError(f"创建仓库 {name} 失败：{_api_message(created)}")
         data = created.json()
     return {
         "full_name": data["full_name"],
@@ -178,7 +241,7 @@ def put_file(settings: dict, repo_full_name: str, path: str, content: str, messa
                     return
         resp = client.put(f"/repos/{repo_full_name}/contents/{path}", json=body)
         if resp.status_code not in {200, 201}:
-            raise GitHubLinkError(f"写入 {repo_full_name}/{path} 失败：{resp.status_code} {resp.text[:240]}")
+            raise GitHubLinkError(f"写入 {repo_full_name}/{path} 失败：{_api_message(resp)}")
 
 
 def build_catalog_markdown(login: str, items: list[dict], hub_repo: str, app_url: str = "") -> str:

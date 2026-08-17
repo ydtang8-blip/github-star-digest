@@ -13,6 +13,7 @@ from .github_link import (
     GitHubLinkError,
     ensure_fork,
     fetch_identity,
+    inspect_token,
     link_local_clone,
     publish_app_repo,
     sync_hub_catalog,
@@ -132,8 +133,17 @@ def run_daily_collect(force: bool = False) -> dict[str, Any]:
                 row["repo_id"] = repo_id
                 prepared.append(row)
 
-            _set(stage="summary", progress=75, message="正在写中文摘要…")
-            summaries = summarize_items(prepared, settings)
+            engine = "DeepSeek" if settings.get("deepseek_api_key") else "简要规则"
+            _set(stage="summary", progress=75, message=f"正在用 {engine} 写中文摘要…")
+
+            def on_collect_batch(done, total, _part):
+                _set(
+                    stage="summary",
+                    progress=75 + int(done / max(total, 1) * 20),
+                    message=f"正在用 {engine} 写中文摘要（{done}/{total} 批）…",
+                )
+
+            summaries = summarize_items(prepared, settings, on_batch=on_collect_batch)
             for row, summary in zip(prepared, summaries):
                 db.update_item_summary(conn, row["item_id"], summary)
                 if row.get("readme_excerpt"):
@@ -302,9 +312,20 @@ def run_connect() -> dict[str, Any]:
         identity = fetch_identity(settings)
         db.save_settings({"github_login": identity["login"]})
         settings = db.get_settings()
-        _set(progress=35, stage="app", message=f"已识别 @{identity['login']}，正在推送日报程序…")
-        app_repo = publish_app_repo(settings)
-        _set(progress=65, stage="hub", message="正在创建/更新你的精选总仓库…")
+        token_info = inspect_token(settings)
+        notes: list[str] = []
+        if token_info.get("fine_grained"):
+            notes.append(
+                "当前是 Fine-grained Token，通常不能新建仓库。"
+                "建议改用 Classic token 并勾选 repo。"
+            )
+        _set(progress=35, stage="app", message=f"已识别 @{identity['login']}，正在接入仓库…")
+        app_repo = None
+        try:
+            app_repo = publish_app_repo(settings)
+        except Exception as exc:
+            notes.append(f"日报程序仓库先跳过：{exc}")
+        _set(progress=55, stage="fork", message="正在把已选项目 fork 到你的账号…")
         linked = 0
         for repo in db.list_catalog_repos():
             try:
@@ -321,18 +342,27 @@ def run_connect() -> dict[str, Any]:
                     status=repo.get("status") if repo.get("status") != "new" else "useful",
                 )
                 linked += 1
-            except Exception:
+            except Exception as exc:
+                notes.append(f"{repo.get('full_name')}: {exc}")
                 continue
-        hub = sync_hub_catalog(settings, db.list_catalog_repos())
+        hub = None
+        _set(progress=80, stage="hub", message="正在更新精选总册…")
+        try:
+            hub = sync_hub_catalog(settings, db.list_catalog_repos())
+        except Exception as exc:
+            notes.append(f"精选总册先跳过：{exc}")
+        parts = [f"已连接 @{identity['login']}。已同步 {linked} 个项目。"]
+        if app_repo:
+            parts.append(f"日报程序 {app_repo['html_url']}")
+        if hub:
+            parts.append(f"精选总册 {hub['html_url']}")
+        if notes:
+            parts.append(" ".join(notes[:4]))
         _set(
             status="done",
             stage="done",
             progress=100,
-            message=(
-                f"已连接 @{identity['login']}。"
-                f"日报程序 {app_repo['html_url']}，精选总册 {hub['html_url']}。"
-                f"已同步 {linked} 个项目。"
-            ),
+            message=" ".join(parts),
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
         return job_status()
@@ -343,6 +373,70 @@ def run_connect() -> dict[str, Any]:
             progress=100,
             message="连接 GitHub 失败",
             error=f"{exc}\n{traceback.format_exc()}",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return job_status()
+    finally:
+        _job_lock.release()
+
+
+def run_summarize(day: str | None = None) -> dict[str, Any]:
+    if not _job_lock.acquire(blocking=False):
+        return job_status()
+    try:
+        settings = db.get_settings()
+        if not settings.get("deepseek_api_key"):
+            raise RuntimeError("还没有填写 DeepSeek API Key。")
+        target = day or db.today_iso()
+        min_stars = int(settings.get("min_stars") or 0)
+        items = db.query_digest(target, min_stars=min_stars)
+        if not items:
+            raise RuntimeError("这一天还没有简报，先采集今日项目。")
+        _set(
+            kind="summarize",
+            status="running",
+            stage="summary",
+            progress=15,
+            message=f"正在用 DeepSeek 写 {len(items)} 条中文摘要…",
+            error="",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at="",
+            downloads=[],
+        )
+        by_name = {(row.get("full_name") or "").lower(): row for row in items}
+
+        def on_batch(done, total, part):
+            with db.db() as conn:
+                for name, extra in part.items():
+                    row = by_name.get(name)
+                    if not row:
+                        continue
+                    db.update_item_summary(conn, row["item_id"], extra)
+            _set(
+                stage="summary",
+                progress=15 + int(done / max(total, 1) * 80),
+                message=f"DeepSeek 摘要进行中（{done}/{total} 批）…",
+            )
+
+        summaries = summarize_items(items, settings, on_batch=on_batch)
+        with db.db() as conn:
+            for row, summary in zip(items, summaries):
+                db.update_item_summary(conn, row["item_id"], summary)
+        _set(
+            status="done",
+            stage="done",
+            progress=100,
+            message=f"中文摘要已更新，共 {len(items)} 条。",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return job_status()
+    except Exception as exc:
+        _set(
+            status="error",
+            stage="error",
+            progress=100,
+            message="DeepSeek 摘要失败",
+            error=str(exc),
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
         return job_status()

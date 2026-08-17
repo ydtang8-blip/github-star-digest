@@ -64,7 +64,7 @@ function renderJob(job) {
   }
   el.hidden = false;
   el.classList.toggle("error", job.status === "error");
-  const extra = job.error ? ` ${job.error.split("\n")[0]}` : "";
+  const extra = job.error ? ` ${job.error.replace(/\s+/g, " ").slice(0, 360)}` : "";
   el.textContent = `${job.message || ""} ${job.status === "running" ? `(${job.progress || 0}%)` : ""}${extra}`;
 }
 
@@ -90,7 +90,7 @@ function renderList() {
           <div>
             <h3>${escapeHtml(item.full_name)}</h3>
             <p class="meta">${escapeHtml(item.language || "未知语言")} · ${sourceLabel(item.source)} · ${statusLabel(item.status)}${item.fork_full_name ? " · 已接入 " + escapeHtml(item.fork_full_name) : ""}</p>
-            <p class="summary">${escapeHtml(item.summary_zh || item.description || "暂无摘要")}</p>
+            <p class="summary">${escapeHtml(item.summary_zh || "暂无中文摘要")}</p>
             <p class="why">${escapeHtml(item.why_useful || "")}</p>
             <div class="tags">${tags}</div>
           </div>
@@ -131,7 +131,7 @@ function renderDetail() {
   el.innerHTML = `
     <h2>${escapeHtml(item.full_name)}</h2>
     <p class="meta">${escapeHtml(item.language || "未知")} · ★ ${fmt(item.stars)} · fork ${fmt(item.forks)} · ${sourceLabel(item.source)}</p>
-    <p>${escapeHtml(item.summary_zh || item.description || "")}</p>
+    <p>${escapeHtml(item.summary_zh || "暂无中文摘要。点「用 DeepSeek 写中文摘要」。")}</p>
     <p class="why">${escapeHtml(item.why_useful || "")}</p>
     <div class="detail-actions">
       <button class="btn" data-act="useful">标为有用</button>
@@ -187,6 +187,7 @@ async function loadDigest() {
     language: $("language").value,
     source: $("source").value,
     status: $("status").value,
+    min_stars: $("min_stars").value || "0",
   });
   const data = await api("/api/digest?" + params.toString());
   state.date = data.date;
@@ -218,32 +219,45 @@ function fillSettings(s) {
   $("download_dir").value = s.download_dir || "";
   $("hub_repo").value = s.hub_repo || "github-star-picks";
   $("github_token").placeholder = s.has_github_token ? "已保存，留空不改" : "ghp_… 需要 repo 权限";
+  $("deepseek_api_key").placeholder = s.has_deepseek_key ? "已保存，留空不改" : "sk-… 到 platform.deepseek.com 创建";
   $("xai_api_key").placeholder = s.has_xai_key ? "已保存，留空不改" : "xai-… 可留空";
   $("rising_days").value = s.rising_days;
   $("rising_min_stars").value = s.rising_min_stars;
+  if (s.min_stars !== undefined && $("min_stars")) {
+    const allowed = ["0", "1000", "2000", "5000", "10000"];
+    const v = String(s.min_stars);
+    $("min_stars").value = allowed.includes(v) ? v : "2000";
+  }
   $("max_repos_per_day").value = s.max_repos_per_day;
   const status = $("github-status");
   if (s.github_connected) {
     status.innerHTML = `已连接 <a href="${s.github_url}" target="_blank" rel="noreferrer">@${escapeHtml(s.github_login)}</a> · 总册 <a href="${s.hub_url}" target="_blank" rel="noreferrer">${escapeHtml(s.hub_repo)}</a> · 日报程序 <a href="${s.app_url}" target="_blank" rel="noreferrer">${escapeHtml(s.app_repo)}</a>`;
   } else {
-    status.textContent = "还没连上你的 GitHub。填 Token 后点「连接并同步到我的 GitHub」。";
+    status.textContent = "还没连上你的 GitHub。请用 Classic Token（勾选 repo），填好后点「连接并同步到我的 GitHub」。";
   }
 }
 
 function renderConnect(s) {
   const bar = $("connect-bar");
   if (!s) return;
+  const bits = [];
   if (s.github_connected) {
-    bar.hidden = false;
-    bar.classList.remove("warn");
-    bar.innerHTML = `已接到 <a href="${s.github_url}" target="_blank" rel="noreferrer">@${escapeHtml(s.github_login)}</a>。精选总册：<a href="${s.hub_url}" target="_blank" rel="noreferrer">${escapeHtml(s.hub_repo)}</a>。下载的项目会 fork 到这个账号，本地 origin 指向你的 fork。`;
-    return;
+    bits.push(`GitHub 已接 <a href="${s.github_url}" target="_blank" rel="noreferrer">@${escapeHtml(s.github_login)}</a>`);
+  } else {
+    bits.push(`还没连 GitHub <button class="btn" id="connect-open" type="button">去连接</button>`);
+  }
+  if (s.has_deepseek_key) {
+    bits.push("DeepSeek V4 Flash 已接入，中文摘要用它来写");
+  } else {
+    bits.push(`还没填 DeepSeek Key，摘要只是简要说明 <button class="btn" id="deepseek-open" type="button">去填写</button>`);
   }
   bar.hidden = false;
-  bar.classList.add("warn");
-  bar.innerHTML = `还没连上你的 GitHub，选中的项目无法接到你的仓库。<button class="btn" id="connect-open" type="button">去连接</button>`;
-  const btn = $("connect-open");
-  if (btn) btn.onclick = () => $("settings").showModal();
+  bar.classList.toggle("warn", !s.github_connected || !s.has_deepseek_key);
+  bar.innerHTML = bits.join(" · ");
+  const connectBtn = $("connect-open");
+  if (connectBtn) connectBtn.onclick = () => $("settings").showModal();
+  const deepseekBtn = $("deepseek-open");
+  if (deepseekBtn) deepseekBtn.onclick = () => $("settings").showModal();
 }
 
 async function startCollect(force) {
@@ -289,12 +303,27 @@ function bind() {
       max_repos_per_day: Number($("max_repos_per_day").value),
     };
     if ($("github_token").value.trim()) payload.github_token = $("github_token").value.trim();
+    if ($("deepseek_api_key").value.trim()) payload.deepseek_api_key = $("deepseek_api_key").value.trim();
     if ($("xai_api_key").value.trim()) payload.xai_api_key = $("xai_api_key").value.trim();
     await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
     $("settings").close();
     $("github_token").value = "";
+    $("deepseek_api_key").value = "";
     $("xai_api_key").value = "";
     await loadDigest();
+  };
+  $("summarize-btn").onclick = async () => {
+    renderJob({ status: "running", progress: 1, message: "正在用 DeepSeek 写中文摘要…" });
+    try {
+      await api("/api/summarize", {
+        method: "POST",
+        body: JSON.stringify({ date: $("date").value || state.date }),
+      });
+      pollJob();
+    } catch (err) {
+      renderJob({ status: "error", message: err.message || "DeepSeek 摘要失败" });
+      $("settings").showModal();
+    }
   };
   $("connect-btn").onclick = async () => {
     const payload = {};
@@ -316,6 +345,13 @@ function bind() {
   $("language").onchange = loadDigest;
   $("source").onchange = loadDigest;
   $("status").onchange = loadDigest;
+  $("min_stars").onchange = async () => {
+    await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ min_stars: Number($("min_stars").value) }),
+    });
+    await loadDigest();
+  };
   $("download-btn").onclick = async () => {
     const ids = [...state.selected];
     if (!ids.length) {

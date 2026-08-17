@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from star_digest import db
 from star_digest.config import WEB_DIR, ensure_dirs
-from star_digest.github_link import GitHubLinkError, fetch_identity
+from star_digest.github_link import GitHubLinkError, fetch_identity, inspect_token
 from star_digest.jobs import (
     job_status,
     link_one_repo,
@@ -21,6 +21,7 @@ from star_digest.jobs import (
     run_connect,
     run_daily_collect,
     run_downloads,
+    run_summarize,
 )
 
 ensure_dirs()
@@ -47,10 +48,13 @@ class SettingsIn(BaseModel):
     app_repo: str | None = None
     xai_api_key: str | None = None
     xai_model: str | None = None
+    deepseek_api_key: str | None = None
+    deepseek_model: str | None = None
     spoken_codes: list[str] | None = None
     prog_langs: list[str] | None = None
     rising_days: int | None = None
     rising_min_stars: int | None = None
+    min_stars: int | None = None
     max_repos_per_day: int | None = None
 
 
@@ -60,6 +64,10 @@ class ConnectIn(BaseModel):
 
 class CollectIn(BaseModel):
     force: bool = False
+
+
+class SummarizeIn(BaseModel):
+    date: str | None = None
 
 
 @app.get("/")
@@ -79,9 +87,14 @@ def api_digest(
     language: str = "",
     source: str = "",
     status: str = "",
+    min_stars: int = -1,
 ) -> dict:
     day = date or db.today_iso()
-    items = db.query_digest(day, q=q, language=language, source=source, status=status)
+    if min_stars < 0:
+        min_stars = int(db.get_settings().get("min_stars") or 0)
+    items = db.query_digest(
+        day, q=q, language=language, source=source, status=status, min_stars=min_stars
+    )
     return {
         "date": day,
         "dates": db.list_dates(),
@@ -111,6 +124,17 @@ def api_status(repo_id: int, body: StatusIn) -> dict:
         except GitHubLinkError:
             pass
     return row
+
+
+@app.post("/api/summarize")
+def api_summarize(body: SummarizeIn) -> dict:
+    settings = db.get_settings()
+    if not settings.get("deepseek_api_key"):
+        raise HTTPException(400, "请先在设置里填写 DeepSeek API Key")
+    if not mark_started("summarize", "正在用 DeepSeek 写中文摘要"):
+        raise HTTPException(409, "已有任务在跑，请稍后再试")
+    threading.Thread(target=run_summarize, kwargs={"day": body.date or ""}, daemon=True).start()
+    return job_status()
 
 
 @app.post("/api/collect")
@@ -152,6 +176,8 @@ def api_save_settings(body: SettingsIn) -> dict:
         payload.pop("github_token")
     if payload.get("xai_api_key") == "********":
         payload.pop("xai_api_key")
+    if payload.get("deepseek_api_key") == "********":
+        payload.pop("deepseek_api_key")
     if payload.get("download_dir"):
         path = Path(payload["download_dir"]).expanduser()
         payload["download_dir"] = str(path)
@@ -169,6 +195,19 @@ def api_save_settings(body: SettingsIn) -> dict:
 @app.get("/api/github")
 def api_github_status() -> dict:
     return db.public_settings()
+
+
+@app.get("/api/github/token-info")
+def api_github_token_info() -> dict:
+    settings = db.get_settings()
+    if not settings.get("github_token"):
+        return {"has_token": False}
+    try:
+        info = inspect_token(settings)
+        info["has_token"] = True
+        return info
+    except GitHubLinkError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/github/connect")

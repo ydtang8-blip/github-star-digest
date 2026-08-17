@@ -150,10 +150,13 @@ def save_settings(payload: dict[str, Any]) -> dict:
         "app_repo",
         "xai_api_key",
         "xai_model",
+        "deepseek_api_key",
+        "deepseek_model",
         "spoken_codes",
         "prog_langs",
         "rising_days",
         "rising_min_stars",
+        "min_stars",
         "max_repos_per_day",
         "port",
     }
@@ -173,7 +176,11 @@ def save_settings(payload: dict[str, Any]) -> dict:
     from .config import write_env
 
     merged = get_settings()
-    write_env(merged.get("github_token", ""), merged.get("xai_api_key", ""))
+    write_env(
+        merged.get("github_token", ""),
+        merged.get("xai_api_key", ""),
+        merged.get("deepseek_api_key", ""),
+    )
     Path(merged["download_dir"]).mkdir(parents=True, exist_ok=True)
     return public_settings(merged)
 
@@ -182,6 +189,7 @@ def public_settings(settings: dict | None = None) -> dict:
     s = dict(settings or get_settings())
     s["has_github_token"] = bool(s.get("github_token"))
     s["has_xai_key"] = bool(s.get("xai_api_key"))
+    s["has_deepseek_key"] = bool(s.get("deepseek_api_key"))
     s["github_connected"] = bool(s.get("github_token") and s.get("github_login"))
     s["github_url"] = f"https://github.com/{s['github_login']}" if s.get("github_login") else ""
     s["hub_url"] = (
@@ -196,6 +204,7 @@ def public_settings(settings: dict | None = None) -> dict:
     )
     s["github_token"] = "********" if s.get("github_token") else ""
     s["xai_api_key"] = "********" if s.get("xai_api_key") else ""
+    s["deepseek_api_key"] = "********" if s.get("deepseek_api_key") else ""
     return s
 
 
@@ -403,6 +412,7 @@ def query_digest(
     language: str = "",
     source: str = "",
     status: str = "",
+    min_stars: int = 0,
 ) -> list[dict]:
     sql = """
         SELECT
@@ -460,7 +470,10 @@ def query_digest(
     if status:
         sql += " AND r.status = ?"
         params.append(status)
-    sql += " ORDER BY d.stars_today DESC, r.stars DESC, d.rank ASC"
+    if min_stars:
+        sql += " AND r.stars >= ?"
+        params.append(int(min_stars))
+    sql += " ORDER BY r.stars DESC, d.stars_today DESC, d.rank ASC"
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
     items = []

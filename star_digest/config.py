@@ -24,10 +24,14 @@ DEFAULTS: dict = {
     "app_repo": "github-star-digest",
     "xai_api_key": "",
     "xai_model": "grok-4.5",
+    "deepseek_api_key": "",
+    "deepseek_model": "deepseek-v4-flash",
+    "deepseek_base_url": "https://api.deepseek.com",
     "spoken_codes": ["", "zh"],
     "prog_langs": [],
     "rising_days": 7,
-    "rising_min_stars": 50,
+    "rising_min_stars": 2000,
+    "min_stars": 2000,
     "max_repos_per_day": 60,
     "user_agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -48,6 +52,7 @@ def _load_env_file() -> dict[str, str]:
     return {
         "github_token": os.environ.get("GITHUB_TOKEN", "").strip(),
         "xai_api_key": os.environ.get("XAI_API_KEY", "").strip(),
+        "deepseek_api_key": os.environ.get("DEEPSEEK_API_KEY", "").strip(),
     }
 
 
@@ -58,6 +63,8 @@ def load_settings(db_overlay: dict | None = None) -> dict:
         settings["github_token"] = env["github_token"]
     if env["xai_api_key"]:
         settings["xai_api_key"] = env["xai_api_key"]
+    if env.get("deepseek_api_key"):
+        settings["deepseek_api_key"] = env["deepseek_api_key"]
     if db_overlay:
         for key, value in db_overlay.items():
             if value is None or value == "":
@@ -69,17 +76,18 @@ def load_settings(db_overlay: dict | None = None) -> dict:
                     settings[key] = [v.strip() for v in value.split(",") if v.strip()]
             elif key == "port":
                 settings[key] = int(value)
-            elif key in {"rising_days", "rising_min_stars", "max_repos_per_day"}:
+            elif key in {"rising_days", "rising_min_stars", "max_repos_per_day", "min_stars"}:
                 settings[key] = int(value)
             else:
                 settings[key] = value
     return settings
 
 
-def write_env(github_token: str, xai_api_key: str) -> None:
+def write_env(github_token: str, xai_api_key: str = "", deepseek_api_key: str = "") -> None:
     lines = [
         f"GITHUB_TOKEN={github_token or ''}",
         f"XAI_API_KEY={xai_api_key or ''}",
+        f"DEEPSEEK_API_KEY={deepseek_api_key or ''}",
         "",
     ]
     ENV_PATH.write_text("\n".join(lines), encoding="utf-8")
@@ -87,3 +95,5 @@ def write_env(github_token: str, xai_api_key: str) -> None:
         os.environ["GITHUB_TOKEN"] = github_token
     if xai_api_key:
         os.environ["XAI_API_KEY"] = xai_api_key
+    if deepseek_api_key:
+        os.environ["DEEPSEEK_API_KEY"] = deepseek_api_key

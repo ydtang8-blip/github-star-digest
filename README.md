@@ -29,9 +29,9 @@ powershell -ExecutionPolicy Bypass -File ".\scripts\install-daily-task.ps1"
 
 ## Token
 
-到 [token 页面](https://github.com/settings/tokens) 新建，勾选 **`repo`**（创建仓库、fork、推送都需要）。
+到 [Classic Token 页面](https://github.com/settings/tokens/new) 新建，勾选 **`repo`**（创建仓库、fork、推送都需要）。细粒度 Token 默认不能新建仓库。
 
-可选：在设置里再填 xAI API Key，摘要会更好。
+中文摘要默认走 **DeepSeek**。在设置里填 `DEEPSEEK_API_KEY`，或到 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 创建后粘贴。填好后点「用 DeepSeek 写中文摘要」。
 
 ## 手动命令
 

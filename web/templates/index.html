@@ -19,6 +19,7 @@
       </label>
       <button class="btn" id="refresh-btn" type="button">刷新</button>
       <button class="btn" id="collect-btn" type="button">重新采集今日</button>
+      <button class="btn" id="summarize-btn" type="button">用 DeepSeek 写中文摘要</button>
       <button class="btn ghost" id="settings-btn" type="button">设置</button>
     </div>
   </header>
@@ -44,6 +45,13 @@
       <option value="useful">已标有用</option>
       <option value="skipped">已忽略</option>
       <option value="downloaded">已下载</option>
+    </select>
+    <select id="min_stars">
+      <option value="0">不限 star</option>
+      <option value="1000">≥ 1,000</option>
+      <option value="2000" selected>≥ 2,000</option>
+      <option value="5000">≥ 5,000</option>
+      <option value="10000">≥ 10,000</option>
     </select>
   </section>
 
@@ -74,12 +82,16 @@
         <input name="download_dir" id="download_dir" />
       </label>
       <label>GitHub Token（必填，用来接到你的仓库）
-        <input name="github_token" id="github_token" placeholder="ghp_… 需要 repo 权限" autocomplete="off" />
+        <input name="github_token" id="github_token" placeholder="建议用 ghp_ 开头的 Classic Token，勾选 repo" autocomplete="off" />
       </label>
       <label>精选总仓库名
         <input name="hub_repo" id="hub_repo" placeholder="github-star-picks" />
       </label>
-      <label>xAI API Key（可选，用来写更好的中文摘要）
+      <label>DeepSeek API Key（中文摘要固定用 V4 Flash）
+        <input name="deepseek_api_key" id="deepseek_api_key" placeholder="sk-… 到 platform.deepseek.com 创建" autocomplete="off" />
+      </label>
+      <p class="hint" id="deepseek-model-hint">摘要模型：DeepSeek V4 Flash（deepseek-v4-flash）</p>
+      <label>xAI API Key（可选备用）
         <input name="xai_api_key" id="xai_api_key" placeholder="xai-… 可留空" autocomplete="off" />
       </label>
       <div class="row">
@@ -93,7 +105,7 @@
           <input name="max_repos_per_day" id="max_repos_per_day" type="number" min="10" max="120" />
         </label>
       </div>
-      <p class="hint">到 <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer">GitHub Token</a> 新建，勾选 <code>repo</code>。只存在本机，服务只监听 127.0.0.1。</p>
+      <p class="hint">请用 <a href="https://github.com/settings/tokens/new" target="_blank" rel="noreferrer">Classic Token</a>，勾选 <code>repo</code>。细粒度 Token 默认不能新建仓库。DeepSeek Key 到 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">platform.deepseek.com</a> 建。都只存在本机。</p>
       <div class="sheet-actions">
         <button class="btn ghost" value="cancel" type="submit">关闭</button>
         <button class="btn" id="save-settings" type="button">保存</button>
