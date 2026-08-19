@@ -146,9 +146,9 @@ def summarize_with_deepseek(batch: list[dict], settings: dict) -> dict[str, dict
         return {}
     from openai import OpenAI
 
-    model = "deepseek-v4-flash"
+    model = settings.get("deepseek_model") or "deepseek-v4-flash"
     base_url = settings.get("deepseek_base_url") or "https://api.deepseek.com"
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=25.0)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
     kwargs = dict(
         model=model,
         messages=[
@@ -160,7 +160,7 @@ def summarize_with_deepseek(batch: list[dict], settings: dict) -> dict[str, dict
         ],
         stream=False,
         temperature=0.2,
-        max_tokens=700,
+        max_tokens=2000,
         extra_body={"thinking": {"type": "disabled"}},
     )
     try:
@@ -189,21 +189,47 @@ def _chunks(rows: list[dict], size: int) -> list[list[dict]]:
     return [rows[i : i + size] for i in range(0, len(rows), size)]
 
 
+def _run_batch_safely(chunk: list[dict], settings: dict, fn) -> dict[str, dict]:
+    def covered(part: dict[str, dict]) -> dict[str, dict]:
+        return {
+            name: item
+            for name, item in part.items()
+            if (item.get("summary_zh") or "").strip()
+        }
+
+    try:
+        part = covered(fn(chunk, settings))
+    except Exception:
+        part = {}
+    missing = [
+        row for row in chunk if (row.get("full_name") or "").lower() not in part
+    ]
+    if missing:
+        try:
+            part.update(covered(fn(missing, settings)))
+        except Exception:
+            pass
+    return part
+
+
 def _run_batches(rows: list[dict], settings: dict, fn, on_batch=None) -> dict[str, dict]:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     ai_map: dict[str, dict] = {}
-    batches = _chunks(rows, 6)
+    batches = _chunks(rows, 3)
     workers = min(3, max(1, len(batches)))
     if workers == 1:
         for i, chunk in enumerate(batches, start=1):
-            part = fn(chunk, settings)
+            part = _run_batch_safely(chunk, settings, fn)
             ai_map.update(part)
             if on_batch:
                 on_batch(i, len(batches), part)
         return ai_map
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fn, chunk, settings): idx for idx, chunk in enumerate(batches, start=1)}
+        futures = {
+            pool.submit(_run_batch_safely, chunk, settings, fn): idx
+            for idx, chunk in enumerate(batches, start=1)
+        }
         done = 0
         for fut in as_completed(futures):
             part = fut.result()

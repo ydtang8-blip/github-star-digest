@@ -16,7 +16,6 @@ from star_digest.config import WEB_DIR, ensure_dirs
 from star_digest.github_link import GitHubLinkError, fetch_identity, inspect_token
 from star_digest.jobs import (
     job_status,
-    link_one_repo,
     mark_started,
     run_connect,
     run_daily_collect,
@@ -118,11 +117,6 @@ def api_status(repo_id: int, body: StatusIn) -> dict:
     row = db.set_repo_status(repo_id, body.status, notes=body.notes)
     if not row:
         raise HTTPException(404, "仓库不存在")
-    if body.status in {"useful", "downloaded"} and db.get_settings().get("github_token"):
-        try:
-            row = link_one_repo(repo_id) or row
-        except GitHubLinkError:
-            pass
     return row
 
 

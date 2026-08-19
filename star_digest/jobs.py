@@ -396,8 +396,7 @@ def run_summarize(day: str | None = None) -> dict[str, Any]:
         if not settings.get("deepseek_api_key"):
             raise RuntimeError("还没有填写 DeepSeek API Key。")
         target = day or db.today_iso()
-        min_stars = int(settings.get("min_stars") or 0)
-        items = db.query_digest(target, min_stars=min_stars)
+        items = db.query_digest(target, min_stars=0)
         if not items:
             raise RuntimeError("这一天还没有简报，先采集今日项目。")
         _set(

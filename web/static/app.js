@@ -5,6 +5,7 @@ const state = {
   activeId: null,
   jobTimer: null,
   autoCollected: false,
+  jobRunning: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -44,8 +45,16 @@ function renderStats(stats) {
     ["已接到我的 GitHub", stats.linked],
     ["历史已下载", stats.all_downloaded],
   ]
-    .map(([label, value]) => `<div class="stat"><b>${fmt(value)}</b><span>${label}</span></div>`)
+    .map(
+      ([label, value]) =>
+        `<div class="stat" ${label === "已标有用" ? 'id="stat-useful" style="cursor:pointer" title="点击只看已标有用"' : ""}><b>${fmt(value)}</b><span>${label}</span></div>`
+    )
     .join("");
+  const s = $("stat-useful");
+  if (s) s.onclick = () => {
+    $("status").value = $("status").value === "useful" ? "" : "useful";
+    loadDigest();
+  };
 }
 
 function renderLangs(stats) {
@@ -58,6 +67,8 @@ function renderLangs(stats) {
 
 function renderJob(job) {
   const el = $("job");
+  const wasRunning = state.jobRunning;
+  state.jobRunning = Boolean(job && job.status === "running");
   if (!job || job.status === "idle" || (job.status === "done" && !job.message)) {
     el.hidden = true;
     return;
@@ -66,6 +77,18 @@ function renderJob(job) {
   el.classList.toggle("error", job.status === "error");
   const extra = job.error ? ` ${job.error.replace(/\s+/g, " ").slice(0, 360)}` : "";
   el.textContent = `${job.message || ""} ${job.status === "running" ? `(${job.progress || 0}%)` : ""}${extra}`;
+  if (state.jobRunning && !wasRunning) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function flash(message) {
+  const el = $("job");
+  el.hidden = false;
+  el.classList.remove("error");
+  el.textContent = message;
+  state.jobRunning = true;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function renderList() {
@@ -84,11 +107,18 @@ function renderList() {
           ? `较上次 ${item.stars_delta > 0 ? "+" : ""}${fmt(item.stars_delta)}`
           : "";
       const tags = (item.tags || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+      const badge = item.status === "useful"
+        ? `<span class="badge useful">✓ 已标有用</span>`
+        : item.status === "downloaded"
+          ? `<span class="badge downloaded">⬇ 已下载</span>`
+          : item.status === "skipped"
+            ? `<span class="badge skipped">已忽略</span>`
+            : "";
       return `
         <article class="card ${item.status} ${active}" data-id="${item.repo_id}">
           <input class="check" type="checkbox" data-check="${item.repo_id}" ${checked} />
           <div>
-            <h3>${escapeHtml(item.full_name)}</h3>
+            <h3>${escapeHtml(item.full_name)} ${badge}</h3>
             <p class="meta">${escapeHtml(item.language || "未知语言")} · ${sourceLabel(item.source)} · ${statusLabel(item.status)}${item.fork_full_name ? " · 已接入 " + escapeHtml(item.fork_full_name) : ""}</p>
             <p class="summary">${escapeHtml(item.summary_zh || "暂无中文摘要")}</p>
             <p class="why">${escapeHtml(item.why_useful || "")}</p>
@@ -156,11 +186,23 @@ function renderDetail() {
         await startDownload([item.repo_id]);
         return;
       }
-      await api(`/api/repo/${item.repo_id}/status`, {
-        method: "POST",
-        body: JSON.stringify({ status: act }),
-      });
-      await loadDigest();
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = act === "useful" ? "标记中…" : "处理中…";
+      try {
+        flash(act === "useful" ? "正在标记为有用…" : "正在忽略…");
+        await api(`/api/repo/${item.repo_id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: act }),
+        });
+        await loadDigest();
+        flash(act === "useful" ? "已标为有用" : "已忽略");
+      } catch (err) {
+        renderJob({ status: "error", message: err.message || "操作失败" });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
     });
   });
 }
@@ -291,7 +333,11 @@ function pollJob() {
 }
 
 function bind() {
-  $("refresh-btn").onclick = () => loadDigest();
+  $("refresh-btn").onclick = async () => {
+    flash("正在刷新列表…");
+    await loadDigest();
+    flash("列表已刷新");
+  };
   $("collect-btn").onclick = () => startCollect(true);
   $("settings-btn").onclick = () => $("settings").showModal();
   $("save-settings").onclick = async () => {
@@ -305,12 +351,14 @@ function bind() {
     if ($("github_token").value.trim()) payload.github_token = $("github_token").value.trim();
     if ($("deepseek_api_key").value.trim()) payload.deepseek_api_key = $("deepseek_api_key").value.trim();
     if ($("xai_api_key").value.trim()) payload.xai_api_key = $("xai_api_key").value.trim();
+    flash("正在保存设置…");
     await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
     $("settings").close();
     $("github_token").value = "";
     $("deepseek_api_key").value = "";
     $("xai_api_key").value = "";
     await loadDigest();
+    flash("设置已保存");
   };
   $("summarize-btn").onclick = async () => {
     renderJob({ status: "running", progress: 1, message: "正在用 DeepSeek 写中文摘要…" });
@@ -346,11 +394,13 @@ function bind() {
   $("source").onchange = loadDigest;
   $("status").onchange = loadDigest;
   $("min_stars").onchange = async () => {
+    flash("正在更新最低 star 筛选…");
     await api("/api/settings", {
       method: "POST",
       body: JSON.stringify({ min_stars: Number($("min_stars").value) }),
     });
     await loadDigest();
+    flash("最低 star 筛选已更新");
   };
   $("download-btn").onclick = async () => {
     const ids = [...state.selected];
@@ -361,15 +411,34 @@ function bind() {
     await startDownload(ids);
   };
   $("mark-useful-btn").onclick = async () => {
-    for (const id of state.selected) {
-      await api(`/api/repo/${id}/status`, {
-        method: "POST",
-        body: JSON.stringify({ status: "useful" }),
-      });
+    const ids = [...state.selected];
+    if (!ids.length) {
+      alert("先勾选左边几个有用的项目。");
+      return;
     }
-    await loadDigest();
+    const btn = $("mark-useful-btn");
+    btn.disabled = true;
+    try {
+      flash(`正在标记 ${ids.length} 个项目为有用…`);
+      for (const id of ids) {
+        await api(`/api/repo/${id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status: "useful" }),
+        });
+      }
+      await loadDigest();
+      flash(`已将 ${ids.length} 个项目标为有用`);
+    } catch (err) {
+      renderJob({ status: "error", message: err.message || "操作失败" });
+    } finally {
+      btn.disabled = false;
+    }
   };
-  $("open-folder-btn").onclick = () => api("/api/open-folder", { method: "POST" });
+  $("open-folder-btn").onclick = async () => {
+    flash("正在打开下载目录…");
+    await api("/api/open-folder", { method: "POST" });
+    flash("已打开下载目录");
+  };
 }
 
 function debounce(fn, wait) {
