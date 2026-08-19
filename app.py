@@ -242,6 +242,8 @@ def api_open_folder(path: str = "") -> dict:
         target = root
     if os.name == "nt":
         os.startfile(str(target))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
     else:
         subprocess.Popen(["xdg-open", str(target)])
     return {"ok": True, "path": str(target)}
