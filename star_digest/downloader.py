@@ -34,6 +34,29 @@ def already_downloaded(path: Path) -> bool:
     return any(path.iterdir())
 
 
+def sync_local_downloads(settings: dict) -> int:
+    from . import db
+
+    root = Path(settings.get("download_dir") or "")
+    if not root.exists():
+        return 0
+    marked = 0
+    with db.db() as conn:
+        rows = conn.execute(
+            "SELECT id, full_name, status, local_path FROM repos"
+            " WHERE status != 'downloaded' OR IFNULL(local_path, '') = ''"
+        ).fetchall()
+        for row in rows:
+            dest = target_dir(root, row["full_name"])
+            if already_downloaded(dest):
+                conn.execute(
+                    "UPDATE repos SET status='downloaded', local_path=? WHERE id=?",
+                    (str(dest), row["id"]),
+                )
+                marked += 1
+    return marked
+
+
 def download_repo(full_name: str, download_root: str | Path, settings: dict) -> Path:
     dest = target_dir(download_root, full_name)
     dest.parent.mkdir(parents=True, exist_ok=True)

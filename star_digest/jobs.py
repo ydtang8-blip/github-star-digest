@@ -221,6 +221,12 @@ def run_downloads(repo_ids: list[int]) -> dict[str, Any]:
                     identity = fetch_identity(settings)
                     db.save_settings({"github_login": identity["login"]})
                     settings = db.get_settings()
+                if repo.get("status") == "downloaded" and (repo.get("local_path") or ""):
+                    entry["status"] = "done"
+                    entry["message"] = "已下载过，跳过"
+                    entry["path"] = repo.get("local_path")
+                    _set(downloads=list(downloads))
+                    continue
                 link = ensure_fork(repo["full_name"], settings)
                 path = download_repo(repo["full_name"], root, settings)
                 link_local_clone(repo["full_name"], link["fork_full_name"], settings)

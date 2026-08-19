@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from star_digest import db
 from star_digest.config import WEB_DIR, ensure_dirs
+from star_digest.downloader import sync_local_downloads
 from star_digest.github_link import GitHubLinkError, fetch_identity, inspect_token
 from star_digest.jobs import (
     job_status,
@@ -89,6 +90,10 @@ def api_digest(
     min_stars: int = -1,
 ) -> dict:
     day = date or db.today_iso()
+    try:
+        sync_local_downloads(db.get_settings())
+    except Exception:
+        pass
     if min_stars < 0:
         min_stars = int(db.get_settings().get("min_stars") or 0)
     items = db.query_digest(

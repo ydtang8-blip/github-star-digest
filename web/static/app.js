@@ -99,8 +99,10 @@ function renderList() {
   }
   box.innerHTML = state.items
     .map((item) => {
-      const checked = state.selected.has(item.repo_id) ? "checked" : "";
+      const downloaded = item.status === "downloaded";
+      const checked = !downloaded && state.selected.has(item.repo_id) ? "checked" : "";
       const active = state.activeId === item.repo_id ? "active" : "";
+      const disabled = downloaded ? "disabled" : "";
       const delta = item.stars_today
         ? `今日 +${fmt(item.stars_today)}`
         : item.stars_delta
@@ -116,7 +118,7 @@ function renderList() {
             : "";
       return `
         <article class="card ${item.status} ${active}" data-id="${item.repo_id}">
-          <input class="check" type="checkbox" data-check="${item.repo_id}" ${checked} />
+          <input class="check" type="checkbox" data-check="${item.repo_id}" ${checked} ${disabled} title="${downloaded ? "已下载，无需重复下载" : ""}" />
           <div>
             <h3>${escapeHtml(item.full_name)} ${badge}</h3>
             <p class="meta">${escapeHtml(item.language || "未知语言")} · ${sourceLabel(item.source)} · ${statusLabel(item.status)}${item.fork_full_name ? " · 已接入 " + escapeHtml(item.fork_full_name) : ""}</p>
